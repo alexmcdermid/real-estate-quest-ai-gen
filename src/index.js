@@ -1,6 +1,6 @@
 import { fetchChapterQuestions } from "./fetchQuestions.js";
 import { generateQuestion } from "./generateQuestion.js";
-import { getLastAiQuestionNumber, writePendingQuestion } from "./writeToFirestore.js";
+import { getLastAiQuestionNumber, getExistingAiQuestions, writePendingQuestion } from "./writeToFirestore.js";
 
 const TOTAL_CHAPTERS = 20;
 
@@ -19,13 +19,17 @@ async function run() {
   console.log(`Mode: ${dryRun ? "DRY RUN (no write)" : "live"}`);
   console.log(`Generating question for chapter ${chapter}`);
 
-  const existingQuestions = await fetchChapterQuestions(chapter);
-  console.log(`Fetched ${existingQuestions.length} existing questions from chapter ${chapter}`);
+  const [existingQuestions, aiQuestions, lastNumber] = await Promise.all([
+    fetchChapterQuestions(chapter),
+    getExistingAiQuestions(chapter),
+    getLastAiQuestionNumber(chapter),
+  ]);
 
-  const lastNumber = await getLastAiQuestionNumber(chapter);
+  console.log(`Fetched ${existingQuestions.length} human-written questions and ${aiQuestions.length} existing AI questions for chapter ${chapter}`);
+
   const nextQuestionNumber = lastNumber + 1;
 
-  const newQuestion = await generateQuestion(chapter, existingQuestions, nextQuestionNumber);
+  const newQuestion = await generateQuestion(chapter, existingQuestions, aiQuestions, nextQuestionNumber);
 
   if (dryRun) {
     console.log("\n--- GENERATED QUESTION (dry run) ---");

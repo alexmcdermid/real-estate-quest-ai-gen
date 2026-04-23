@@ -30,6 +30,23 @@ export async function getLastAiQuestionNumber(chapter) {
 }
 
 /**
+ * Returns all AI-generated questions for a chapter (pending + approved)
+ * so the prompt can avoid duplicating topics already covered.
+ */
+export async function getExistingAiQuestions(chapter) {
+  const db = getDb();
+  const [pendingSnap, approvedSnap] = await Promise.all([
+    db.collection("questionsAiPending").where("chapter", "==", chapter).get(),
+    db.collection("questionsAiApproved").where("chapter", "==", chapter).get(),
+  ]);
+
+  return [
+    ...pendingSnap.docs.map((d) => d.data()),
+    ...approvedSnap.docs.map((d) => d.data()),
+  ];
+}
+
+/**
  * Writes the generated question to the questionsAiPending collection.
  * The real-estate-quest admin console reads this collection for review.
  */

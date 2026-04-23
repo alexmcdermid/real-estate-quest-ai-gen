@@ -6,11 +6,7 @@ const client = new Anthropic();
  * Sends existing chapter questions to Claude as few-shot examples and asks it
  * to generate one new question in the same format and style.
  */
-export async function generateQuestion(chapter, existingQuestions, nextQuestionNumber) {
-  // Use a random sample of questions as few-shot context to vary the output week to week
-  const shuffled = [...existingQuestions].sort(() => Math.random() - 0.5);
-  const sample = shuffled.slice(0, 10);
-
+export async function generateQuestion(chapter, existingQuestions, aiQuestions, nextQuestionNumber) {
   const systemPrompt = `You are an expert question writer for the BC Real Estate Council (RECBC) licensing examination in British Columbia, Canada.
 
 Your questions must conform to the following rules of the BC real estate licensing exam:
@@ -29,14 +25,18 @@ EXPLANATION FORMAT RULES — follow exactly:
 - Cite the relevant BC legislation, regulation, or principle (e.g. RESA s.3, Land Title Act, RECBC Rules)
 - Explain why common distractors are wrong where helpful`;
 
-  const userPrompt = `Below are ${sample.length} existing questions from Chapter ${chapter} of the BC real estate licensing prep course. Study their topic coverage, style, difficulty, and exact formatting carefully — then generate exactly ONE new, original question.
+  const aiSection = aiQuestions.length > 0
+    ? `\nPREVIOUSLY AI-GENERATED QUESTIONS FOR THIS CHAPTER — do not duplicate any of these topics or scenarios:\n${JSON.stringify(aiQuestions.map((q) => ({ question: q.question, choices: q.choices })), null, 2)}\n`
+    : "";
 
-EXISTING QUESTIONS (for reference only — do NOT reproduce any of these):
-${JSON.stringify(sample, null, 2)}
+  const userPrompt = `Below are all ${existingQuestions.length} existing human-written questions from Chapter ${chapter} of the BC real estate licensing prep course. These are your primary reference — study their topic coverage, style, difficulty, and exact formatting carefully.
+${aiSection}
+HUMAN-WRITTEN QUESTIONS (style and format reference — do NOT reproduce any of these):
+${JSON.stringify(existingQuestions, null, 2)}
 
-Requirements for your new question:
-- Must cover a DIFFERENT specific topic or scenario than the examples above
-- Must be novel — not a rephrasing or recombination of any existing question
+Generate exactly ONE new, original question for Chapter ${chapter}. Requirements:
+- Must cover a topic or scenario not already covered by any question above
+- Must match the style, difficulty, and format of the human-written questions
 - Must have exactly 4 answer choices
 - "correctChoice" is the 0-based index of the correct answer in the choices array
 - "premium" should be true
