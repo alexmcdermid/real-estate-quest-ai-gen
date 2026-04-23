@@ -1,0 +1,16 @@
+{
+  "name": "real-estate-quest-ai-gen",
+  "version": "1.0.0",
+  "description": "Weekly AI-generated real estate exam questions using the Anthropic SDK",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --env-file=.env src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@octokit/rest": "^21.0.0",
+    "firebase-admin": "^13.0.0"
+  }
+}
