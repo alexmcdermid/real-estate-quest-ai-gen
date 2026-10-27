@@ -28,7 +28,7 @@ There is **one Firebase project**, the existing `real-estate-quest`. There is no
 ```mermaid
 flowchart LR
   subgraph GEN["Step 1: Generate (weekly)"]
-    G["generateAiQuestion<br/>(ai-gen codebase)"] <--> CL["Claude API"]
+    G["generateAiQuestions<br/>(ai-gen codebase)"] <--> CL["Claude API"]
   end
 
   subgraph REV["Step 2: Review"]
@@ -50,7 +50,7 @@ flowchart LR
     API["getQuestionsByChapter<br/>preloadContent"]
     STU["Student app"]
     Q --> API
-    QA -- "user toggle on" --> API
+    QA -- "if serve flag on" --> API
     API --> STU
   end
 
@@ -93,31 +93,32 @@ stateDiagram-v2
 sequenceDiagram
   autonumber
   participant S as Cloud Scheduler<br/>(Mon 9am)
-  participant G as generateAiQuestion
+  participant G as generateAiQuestions
   participant F as Firestore
   participant C as Claude API
 
   S->>G: trigger (or Generate now button in admin)
-  G->>F: read metadata/aiQuestions
+  G->>F: read metadata/aiQuestions (generate flag, perRun)
   alt generate flag off
     G-->>S: exit
   end
-  G->>G: pick chapter (week rotation or override)
-  G->>F: read questions for chapter N (few-shot examples)
+  G->>G: pick this week's chapter (rotation or override)
+  G->>F: read every question in chapter N (context)
   G->>F: read questionsAi + questionsAiPending for chapter N (avoid duplicates)
-  loop up to 3 attempts
-    G->>C: messages.create with a JSON schema output format
-    C-->>G: question JSON
-    G->>G: validate (4 choices, Correct Answer prefix, stop_reason)
+  loop up to 3 attempts, until perRun questions are valid
+    G->>C: one request for the remaining count, JSON schema output
+    C-->>G: array of questions
+    G->>G: validate each (4 choices, Correct Answer prefix, stop_reason)
   end
-  alt valid
-    G->>F: add to questionsAiPending (status pending, aiGenerated true)
-  else still invalid
+  G->>F: add valid ones to questionsAiPending (status pending, aiGenerated true)
+  opt fewer than perRun valid
     G->>F: log to function_error_logs
   end
 ```
 
-The generator no longer assigns `questionNumber`. Approval assigns it from the AI repo file, so rejected questions don't leave gaps.
+- **One chapter per week**, with every question in that chapter sent as context. The chapter rotation repeats every 20 weeks.
+- **`perRun` questions per run**, from `metadata/aiQuestions`, so it can change without a deploy. Start at 1–2 and scale to 5–10. They're generated in one request so they don't repeat each other, and the chapter context is only paid for once.
+- **The generator doesn't assign `questionNumber` or `premium`.** The reviewer decides free or premium at approval, and approval assigns the number from the AI repo file, so rejected questions don't leave gaps.
 
 ## Where the generator runs: Cloud Function
 
@@ -126,7 +127,7 @@ Both options are close to free. The Claude call is the real cost, and it's the s
 | | Cloud Function (chosen) | GitHub Actions (current code) |
 |---|---|---|
 | Infra cost | Free tier covers it. Cloud Scheduler gives 3 free jobs per billing account and the project already has 3, so this one is about $0.10/month | Free on a public repo; a private repo uses about 1 of 2,000 free minutes a month |
-| Claude cost | Roughly 10–20 cents per question on Opus 5.5 (up to ~25k input tokens for an 80-question chapter) | Same |
+| Claude cost | On Opus 5.5, about 10 cents per run for the chapter context (up to ~25k input tokens for an 80-question chapter), plus a few cents per question. At 5–10 questions a week, a few dollars a month | Same |
 | Credentials | None leave Google. Reads Firestore directly, so no GitHub token either | Needs a Firebase service account key stored in GitHub, which is why a separate staging project was needed |
 | Manual run | "Generate now" button on the admin page, or force-run the Scheduler job | Run workflow button in GitHub |
 
@@ -136,17 +137,21 @@ The code stays in this repo and deploys to the `real-estate-quest` project as it
 
 ## Changes in this repo
 
-- [ ] Turn `src/index.js` into a `generateAiQuestion` scheduled function. Add `firebase.json` with codebase `ai-gen`, targeting the `real-estate-quest` project.
+- [ ] Turn `src/index.js` into a `generateAiQuestions` scheduled function. Add `firebase.json` with codebase `ai-gen`, targeting the `real-estate-quest` project.
 - [ ] Read few-shot examples from the Firestore `questions` collection instead of GitHub. That drops Octokit and the `GITHUB_PAT` / `QUESTIONS_REPO_PAT` mismatch.
 - [ ] Read duplicate-avoidance context from `questionsAi` plus every `questionsAiPending` doc for the chapter, including rejected ones.
-- [ ] Remove `questionNumber` assignment and the composite-index query that came with it.
-- [ ] Use structured outputs (`output_config.format`), raise `max_tokens`, check `stop_reason`, and retry up to 3 times.
+- [ ] Remove `questionNumber` assignment and the composite-index query that came with it. Stop forcing `premium: true`; the reviewer sets it.
+- [ ] Generate `perRun` questions in one request: the schema returns an array, and each question is validated on its own.
+- [ ] Use structured outputs (`output_config.format`), raise `max_tokens` to fit `perRun` questions (streaming once it's large), check `stop_reason`, and retry up to 3 times for any missing.
 - [ ] Bump `@anthropic-ai/sdk` from 0.39.0 and move to `claude-opus-5-5`.
-- [ ] Check the `generate` flag in `metadata/aiQuestions` before running.
+- [ ] Read the `generate` flag and `perRun` from `metadata/aiQuestions` before running.
 - [ ] Keep a local dry-run script (`DRY_RUN=true`).
 - [ ] Delete the two GitHub workflows and the staging-project setup; rewrite README.md and dev.md.
 
-## Open questions
+## Decisions
 
-- One question per run, or a few (e.g. one per chapter in the week's rotation)?
-- Notify admins when something lands in the queue, or just show a count on the admin page?
+- **Volume:** one chapter per week with all of its questions as context. 1–2 questions per run to start, likely 5–10 later.
+- **Free vs premium:** the reviewer decides at approval, premium by default, the same kind of split as the human questions.
+- **Rejected questions:** kept, so the generator keeps avoiding those topics.
+- **Notifications:** none. New questions just appear in the review queue on the admin page.
+- **Who sees AI questions** (app side): everyone, always labeled as AI. Pro users choose Mixed (default), Human only, or AI only; free users get them mixed in.
