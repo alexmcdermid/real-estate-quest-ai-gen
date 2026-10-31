@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { normalizeQuestionText, validateGeneratedQuestion } from "../src/questionValidation.js";
-import { collectValidQuestions } from "../src/runGeneration.js";
+import { collectValidQuestions } from "../src/collectValidQuestions.js";
 
 /**
  * A valid generated question whose text includes `label`.

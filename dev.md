@@ -81,6 +81,16 @@ You need Node 22, the Firebase CLI (`firebase login`) and the gcloud CLI (`gclou
 
 ## Local runs
 
+To see what the generator writes without any Firebase setup, preview from a local checkout of `real-estate-quest-questions` (a sibling folder by default). It only needs `ANTHROPIC_API_KEY`, in `local-generation.env` or exported, and writes nothing to Firestore or GitHub:
+
+```bash
+CHAPTER_OVERRIDE=3 QUESTION_COUNT=2 npm run preview:local
+```
+
+It prints the questions as the AI questions repo stores them: the human files' fields in the same order, plus `aiGenerated: true` and `aiQuestionId`. `questionNumber`, `premium` and `aiQuestionId` are set at approval, so the preview shows the values a first approval would give. `QUESTIONS_REPO_PATH` points at another checkout and `PREVIEW_OUTPUT_FILE` also writes the JSON to a file.
+
+A full run reads the context from Firestore and writes to the review queue:
+
 ```bash
 npm install
 cp local-generation.env.example local-generation.env   # add ANTHROPIC_API_KEY

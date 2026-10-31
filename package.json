@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "generate:local": "node --env-file=local-generation.env scripts/generateLocally.js"
+    "generate:local": "node --env-file=local-generation.env scripts/generateLocally.js",
+    "preview:local": "node --env-file-if-exists=local-generation.env scripts/previewGeneration.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

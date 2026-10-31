@@ -20,7 +20,8 @@ Both functions run as the `ai-gen` service account, which can write only the `ai
 ```
 src/
   index.js                 function exports: generateAiQuestions (weekly) and generateAiQuestionsNow (callable)
-  runGeneration.js         shared core: settings, lock, daily cap, context, attempts, writes, run record
+  runGeneration.js         shared core: settings, lock, daily cap, context, writes, run record
+  collectValidQuestions.js the attempt loop: request, validate, retry for the missing questions
   generateQuestions.js     the Claude request and response handling
   questionValidation.js    question rules and the duplicate check
   chapterRotation.js       this week's chapter
@@ -29,6 +30,7 @@ src/
   firestore.js             (default) for reads, ai for every write
 scripts/
   generateLocally.js       local runner (npm run generate:local)
+  previewGeneration.js     preview from local question files, no Firebase (npm run preview:local)
   setup-ai-gen-access.sh   one-time database, service account and IAM setup
   check-ai-gen-access.sh   checks the access boundary
 test/                      unit tests (npm test)
@@ -41,6 +43,7 @@ firestore.ai.rules         deny-all rules for the ai database
 ```bash
 npm install
 npm test                                  # unit tests, no credentials needed
+npm run preview:local                     # preview questions from local files, only needs ANTHROPIC_API_KEY
 npm run generate:local                    # one run from your machine, see dev.md
 firebase deploy --only functions:ai-gen   # this repo's functions only
 firebase deploy --only firestore          # the ai database's rules only
