@@ -1,61 +1,47 @@
 # real-estate-quest-ai-gen
 
-A weekly GitHub Actions workflow that uses the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-js) and Claude Opus to generate new BC real estate licensing exam practice questions, demonstrating how to integrate an LLM into an automated content pipeline.
+Cloud Functions that use Claude, through the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript), to write new BC real estate licensing exam practice questions. Every generated question waits in a review queue until an admin approves it on the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin page. Only approved questions reach students.
 
-Generated questions are written to a dedicated Firebase project, reviewed by a human in the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin console, and only then made available to students on the live site.
+The design is in [docs/ai-question-flow.md](docs/ai-question-flow.md). Setup, data and deploys are in [dev.md](dev.md).
 
 ## How it works
 
-1. **Schedule** — A GitHub Actions cron job runs every Monday at 9am UTC
-2. **Fetch** — Reads a chapter's worth of questions from a private question bank via the GitHub API
-3. **Generate** — Sends all questions from that chapter as few-shot examples to Claude Opus, which generates one new original question in the same format and style
-4. **Validate** — Checks the response matches the required JSON schema and explanation format before accepting it
-5. **Write** — Saves the question to `questionsAiPending` in a separate Firebase project, where it waits for human review
-6. **Review** — A human reviews the pending question in the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin console and approves or rejects it
-7. **Publish** — Approved questions are pulled into the production database and served to students on the live site
+1. **Trigger:** `generateAiQuestions` runs every Monday at 9am Pacific while weekly generation is on. The admin page's **Generate now** button calls `generateAiQuestionsNow` (admins only) for a chapter, a question count and an optional dry run.
+2. **Context:** reads the chapter's human questions and published AI questions from the `(default)` Firestore database, read only, plus every question generated for the chapter before, rejected ones included, from the `ai` database.
+3. **Generate:** one Claude Opus 5.5 request for all of the run's questions, with JSON schema structured output, and up to 3 attempts for any that are missing or invalid.
+4. **Validate:** exactly 4 distinct choices, a valid `correctChoice`, an explanation that starts with `Correct Answer: N`, length limits, no ChatGPT citation artifacts, and no duplicates of existing questions.
+5. **Queue:** valid questions go to `questionsAiPending` in the `ai` database, and the run is recorded in `generationRuns`.
+6. **Review and publish (app repo):** approving a question commits it to the private AI questions repo and imports it into `questionsAi`. Rejected questions stay in the queue so their topics aren't generated again.
 
-Questions are never written directly to the production database.
+Both functions run as the `ai-gen` service account, which can write only the `ai` database and only read `(default)`.
 
 ## Project structure
 
 ```
 src/
-  index.js              # entry point — picks chapter, orchestrates the pipeline
-  fetchQuestions.js     # reads chapter questions from private GitHub repo via Octokit
-  generateQuestion.js   # Anthropic SDK call with few-shot prompting + output validation
-  writeToFirestore.js   # writes pending question to Firebase (AI project, not prod)
-.github/workflows/
-  generate-questions.yml  # weekly cron + manual trigger
-  dry-run.yml             # manual trigger only — logs output, no Firestore write
+  index.js                 function exports: generateAiQuestions (weekly) and generateAiQuestionsNow (callable)
+  runGeneration.js         shared core: settings, lock, daily cap, context, attempts, writes, run record
+  generateQuestions.js     the Claude request and response handling
+  questionValidation.js    question rules and the duplicate check
+  chapterRotation.js       this week's chapter
+  chapters.js              chapter names
+  aiSettings.js            metadata/aiQuestions defaults
+  firestore.js             (default) for reads, ai for every write
+scripts/
+  generateLocally.js       local runner (npm run generate:local)
+  setup-ai-gen-access.sh   one-time database, service account and IAM setup
+  check-ai-gen-access.sh   checks the access boundary
+test/                      unit tests (npm test)
+firebase.json              the ai-gen functions codebase and the ai database rules
+firestore.ai.rules         deny-all rules for the ai database
 ```
 
-## Running locally
+## Commands
 
 ```bash
-cp .env.example .env
-# fill in all three credentials (see .env.example for instructions)
 npm install
-npm run dev
+npm test                                  # unit tests, no credentials needed
+npm run generate:local                    # one run from your machine, see dev.md
+firebase deploy --only functions:ai-gen   # this repo's functions only
+firebase deploy --only firestore          # the ai database's rules only
 ```
-
-Use `DRY_RUN=true` in `.env` to generate and log a question without writing to Firestore.
-See [dev.md](dev.md) for full setup instructions including Firebase and GitHub PAT configuration.
-
-## GitHub Actions secrets
-
-| Secret | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `QUESTIONS_REPO_PAT` | Fine-grained GitHub PAT, read-only on the private questions repo |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Service account key for the `real-estate-quest-ai` Firebase project |
-
-Add these under **Settings → Secrets and variables → Actions** in this repo.
-
-## Workflows
-
-| Workflow | Trigger | Effect |
-|---|---|---|
-| Generate AI Question | Weekly (Mon 9am UTC) + manual | Generates and writes to Firestore |
-| Dry Run | Manual only | Generates and logs to Actions output, no write |
-
-Both support an optional chapter number input when triggered manually.
