@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { normalizeQuestionText, removeCitationArtifacts, validateGeneratedQuestion } from "../src/questionValidation.js";
+import { validateGeneratedQuestion } from "../src/questionValidation.js";
+import { normalizeForDuplicateCheck } from "../src/textChecks.js";
 
 const validCandidate = {
   question: "Which of the following best describes a licensee's duty of loyalty to a client?",
@@ -105,7 +106,7 @@ describe("validateGeneratedQuestion", () => {
   });
 
   test("rejects a duplicate of an existing question, ignoring case and whitespace", () => {
-    const existingQuestionTexts = new Set([normalizeQuestionText(validCandidate.question)]);
+    const existingQuestionTexts = new Set([normalizeForDuplicateCheck(validCandidate.question)]);
     const shoutedWithExtraSpaces = `  ${validCandidate.question.toUpperCase().replace(/ /g, "   ")}  `;
     assert.deepEqual(errorsFor({ question: shoutedWithExtraSpaces }, { existingQuestionTexts }), [
       "Question duplicates an existing question",
@@ -134,22 +135,5 @@ describe("validateGeneratedQuestion", () => {
       "Correct choice must be an integer from 0 to 3",
       "Explanation must be non-empty text",
     ]);
-  });
-});
-
-describe("normalizeQuestionText", () => {
-  test("lowercases, collapses whitespace and trims", () => {
-    assert.equal(normalizeQuestionText("  What IS\n\tthe   Answer?  "), "what is the answer?");
-  });
-});
-
-describe("removeCitationArtifacts", () => {
-  test("removes each artifact with the &#8203; entity, a literal zero-width space, or nothing in front", () => {
-    const explanationFromChapter8 = "an unfair result&#8203;:contentReference[oaicite:0]{index=0}" +
-      "&#8203;:contentReference[oaicite:1]{index=1}. Therefore";
-    assert.equal(removeCitationArtifacts(explanationFromChapter8), "an unfair result. Therefore");
-    assert.equal(removeCitationArtifacts("A choice\u200B:contentReference[oaicite:12]{index=12}"), "A choice");
-    assert.equal(removeCitationArtifacts("A question?:contentReference[oaicite:3]{index=3}"), "A question?");
-    assert.equal(removeCitationArtifacts("No artifacts: RESA s.3"), "No artifacts: RESA s.3");
   });
 });

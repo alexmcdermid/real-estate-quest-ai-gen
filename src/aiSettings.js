@@ -1,26 +1,33 @@
-// Same behavior as normalizeAiSettings in real-estate-quest/functions/aiQuestions.js.
-export const DEFAULT_QUESTIONS_PER_RUN = 1;
-export const MAX_QUESTIONS_PER_RUN = 10;
+// Same behavior as normalizeAiSettings in real-estate-quest/functions/aiContent.js.
+export const DEFAULT_ITEMS_PER_RUN = 1;
+export const MAX_ITEMS_PER_RUN = 10;
 
 /**
- * True for an integer question count from 1 to MAX_QUESTIONS_PER_RUN.
+ * True for an integer item (question or flashcard) count from 1 to MAX_ITEMS_PER_RUN.
  */
-export function isValidQuestionCount(value) {
-  return Number.isInteger(value) && value >= 1 && value <= MAX_QUESTIONS_PER_RUN;
+export function isValidItemCount(value) {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_ITEMS_PER_RUN;
 }
 
 /**
- * Turns the metadata/aiQuestions document (or undefined when it doesn't exist) into complete settings.
- * Missing switches are off, and questionsPerRun is an integer clamped to 1..MAX_QUESTIONS_PER_RUN.
+ * Turns the metadata/aiContent document (or undefined when it doesn't exist) into complete settings.
+ * Missing switches are off, and questionsPerRun and flashcardsPerRun are integers clamped to 1..MAX_ITEMS_PER_RUN.
  */
 export function normalizeAiSettings(data) {
-  const parsedQuestionsPerRun = Number(data?.questionsPerRun);
-  const questionsPerRun = Number.isFinite(parsedQuestionsPerRun)
-    ? Math.min(MAX_QUESTIONS_PER_RUN, Math.max(1, Math.trunc(parsedQuestionsPerRun)))
-    : DEFAULT_QUESTIONS_PER_RUN;
   return {
     generationEnabled: data?.generationEnabled === true,
     servingEnabled: data?.servingEnabled === true,
-    questionsPerRun,
+    questionsPerRun: clampItemsPerRun(data?.questionsPerRun),
+    flashcardsPerRun: clampItemsPerRun(data?.flashcardsPerRun),
   };
+}
+
+/**
+ * A stored per-run count as an integer from 1 to MAX_ITEMS_PER_RUN. Missing or unreadable means the default.
+ */
+function clampItemsPerRun(value) {
+  const parsedItemsPerRun = Number(value);
+  return Number.isFinite(parsedItemsPerRun)
+    ? Math.min(MAX_ITEMS_PER_RUN, Math.max(1, Math.trunc(parsedItemsPerRun)))
+    : DEFAULT_ITEMS_PER_RUN;
 }

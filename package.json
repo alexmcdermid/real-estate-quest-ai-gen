@@ -1,14 +1,14 @@
 {
   "name": "real-estate-quest-ai-gen",
   "version": "1.0.0",
-  "description": "Cloud Functions that generate AI real estate exam questions with Claude for human review",
+  "description": "Cloud Functions that generate AI real estate exam questions and flashcards with Claude for human review",
   "type": "module",
   "main": "src/index.js",
   "engines": {
     "node": "22"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test \"test/*.test.js\"",
     "generate:local": "node --env-file=local-generation.env scripts/generateLocally.js",
     "preview:local": "node --env-file-if-exists=local-generation.env scripts/previewGeneration.js"
   },

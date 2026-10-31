@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { MAX_QUESTIONS_PER_RUN, isValidQuestionCount, normalizeAiSettings } from "./aiSettings.js";
+import { MAX_ITEMS_PER_RUN, isValidItemCount, normalizeAiSettings } from "./aiSettings.js";
 import { pickChapterForDate } from "./chapterRotation.js";
-import { collectValidQuestions } from "./collectValidQuestions.js";
-import { TOTAL_CHAPTERS, getChapterName, getManualChapters, isValidChapterNumber } from "./chapters.js";
+import { TOTAL_CHAPTERS, isValidChapterNumber } from "./chapters.js";
+import { generateValidItems, getContentTypeDefinition } from "./contentTypes.js";
 import { FieldValue, Timestamp, aiDb, defaultDb } from "./firestore.js";
-import { requestQuestionBatch } from "./generateQuestions.js";
-import { normalizeQuestionText, validateGeneratedQuestion } from "./questionValidation.js";
 
-export const MANUAL_RUNS_PER_DAY_LIMIT = 5;
+// Across both content types: each Generate now is one run.
+export const MANUAL_RUNS_PER_DAY_LIMIT = 10;
 const GENERATION_TRIGGERS = ["scheduled", "manual", "local"];
 // Matches the functions' 1800 s timeout (src/index.js). A function takes the lock after it starts, so the lock
 // outlives the function.
@@ -17,34 +16,37 @@ const MAX_RECORDED_ERROR_LENGTH = 500;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Generates questions for one chapter and records the run in the ai database's generationRuns collection.
- * Shared by the weekly schedule, the Generate now callable and the local script.
+ * Generates questions or flashcards for one chapter and records the run in the ai database's generationRuns
+ * collection. Shared by the weekly schedule, the Generate now callable and the local script.
  *
  * Outcomes that create no run doc: {status: "skipped" | "already_running" | "daily_limit_reached", reason}.
- * Otherwise: {runId, chapter, dryRun, requestedQuestionCount, generatedQuestionCount, status, errors, questions},
- * where status is "succeeded", "partial" or "failed" and each question has a pendingQuestionId (null on a dry run).
+ * Otherwise: {runId, contentType, chapter, dryRun, requestedItemCount, generatedItemCount, status, errors, items},
+ * where status is "succeeded", "partial" or "failed" and each item (a question or a flashcard) has a
+ * pendingDocumentId (null on a dry run).
  * An unexpected error after the run doc exists marks the run failed, gets a `generationRunId` property, and is
  * rethrown.
  */
 export async function runGeneration({
   trigger,
+  contentType,
   chapterOverride,
-  questionCountOverride,
+  itemCountOverride,
   dryRun = false,
   requestedBy = null,
   anthropicClient,
   now = new Date(),
 }) {
   if (!GENERATION_TRIGGERS.includes(trigger)) throw new Error(`Unknown generation trigger: ${trigger}`);
+  const { perRunSettingName } = getContentTypeDefinition(contentType); // throws for an unknown content type
   if (chapterOverride != null && !isValidChapterNumber(chapterOverride)) {
     throw new Error(`chapterOverride must be an integer from 1 to ${TOTAL_CHAPTERS}, got ${chapterOverride}`);
   }
-  if (questionCountOverride != null && !isValidQuestionCount(questionCountOverride)) {
-    throw new Error(`questionCountOverride must be an integer from 1 to ${MAX_QUESTIONS_PER_RUN}, got ${questionCountOverride}`);
+  if (itemCountOverride != null && !isValidItemCount(itemCountOverride)) {
+    throw new Error(`itemCountOverride must be an integer from 1 to ${MAX_ITEMS_PER_RUN}, got ${itemCountOverride}`);
   }
   if (typeof dryRun !== "boolean") throw new Error(`dryRun must be a boolean, got ${dryRun}`);
 
-  const settings = normalizeAiSettings((await defaultDb.doc("metadata/aiQuestions").get()).data());
+  const settings = normalizeAiSettings((await defaultDb.doc("metadata/aiContent").get()).data());
   if (trigger === "scheduled" && !settings.generationEnabled) {
     return { status: "skipped", reason: "Weekly generation is turned off" };
   }
@@ -65,14 +67,15 @@ export async function runGeneration({
     }
 
     const chapter = chapterOverride ?? pickChapterForDate(now);
-    const requestedQuestionCount = questionCountOverride ?? settings.questionsPerRun;
+    const requestedItemCount = itemCountOverride ?? settings[perRunSettingName];
 
     const runRef = aiDb.collection("generationRuns").doc();
     await runRef.set({
       trigger,
+      contentType,
       chapter,
-      requestedQuestionCount,
-      generatedQuestionCount: 0,
+      requestedItemCount,
+      generatedItemCount: 0,
       status: "running",
       errors: [],
       dryRun,
@@ -85,7 +88,16 @@ export async function runGeneration({
     });
 
     try {
-      return await generateAndRecord({ runRef, trigger, chapter, requestedQuestionCount, dryRun, requestedBy, anthropicClient });
+      return await generateAndRecord({
+        runRef,
+        trigger,
+        contentType,
+        chapter,
+        requestedItemCount,
+        dryRun,
+        requestedBy,
+        anthropicClient,
+      });
     } catch (error) {
       await markRunFailed(runRef, error);
       error.generationRunId = runRef.id;
@@ -97,75 +109,70 @@ export async function runGeneration({
 }
 
 /**
- * Reads the chapter context, collects valid questions from Claude, then writes the pending questions (unless it's a
- * dry run) and the finished run doc in one batch.
+ * Reads the chapter context, collects valid items from Claude, then writes the pending documents (unless it's a dry
+ * run) and the finished run doc in one batch.
  */
-async function generateAndRecord({ runRef, trigger, chapter, requestedQuestionCount, dryRun, requestedBy, anthropicClient }) {
-  // Equality filters only: no composite indexes. Rejected pending questions are included on purpose, so their
-  // topics aren't generated again.
-  const [humanQuestionsSnapshot, liveAiQuestionsSnapshot, previousAiQuestionsSnapshot] = await Promise.all([
-    defaultDb.collection("questions").where("chapter", "==", chapter).get(),
-    defaultDb.collection("questionsAi").where("chapter", "==", chapter).get(),
-    aiDb.collection("questionsAiPending").where("chapter", "==", chapter).get(),
+async function generateAndRecord({
+  runRef,
+  trigger,
+  contentType,
+  chapter,
+  requestedItemCount,
+  dryRun,
+  requestedBy,
+  anthropicClient,
+}) {
+  const definition = getContentTypeDefinition(contentType);
+  // Equality filters only: no composite indexes. Rejected pending documents are included on purpose, so their
+  // topics and terms aren't generated again. The chapter's items are the prompt's context; a content type whose
+  // duplicate check covers every chapter also reads every chapter's items.
+  const [humanItemsSnapshot, liveAiItemsSnapshot, previousAiItemsSnapshot, everyChapterItems] = await Promise.all([
+    defaultDb.collection(definition.humanCollectionName).where("chapter", "==", chapter).get(),
+    defaultDb.collection(definition.liveAiCollectionName).where("chapter", "==", chapter).get(),
+    aiDb.collection(definition.pendingCollectionName).where("chapter", "==", chapter).get(),
+    definition.duplicateCheckCoversEveryChapter ? readEveryChapterDuplicateCheckFields(definition) : undefined,
   ]);
-  const humanQuestions = sortByQuestionNumber(humanQuestionsSnapshot.docs.map((doc) => doc.data()));
-  const liveAiQuestions = sortByQuestionNumber(liveAiQuestionsSnapshot.docs.map((doc) => doc.data()));
-  const previousAiQuestions = previousAiQuestionsSnapshot.docs.map((doc) => doc.data());
-  const contextQuestionTexts = [...humanQuestions, ...liveAiQuestions, ...previousAiQuestions]
-    .map((existingQuestion) => existingQuestion.question)
-    .filter((questionText) => typeof questionText === "string")
-    .map(normalizeQuestionText);
 
-  const chapterName = getChapterName(chapter);
-  const collected = await collectValidQuestions({
-    requestedQuestionCount,
-    requestBatch: ({ questionCount, acceptedQuestions }) => requestQuestionBatch({
-      anthropicClient,
-      chapter,
-      chapterName,
-      manualChapters: getManualChapters(chapter),
-      humanQuestions,
-      liveAiQuestions,
-      previousAiQuestions,
-      acceptedQuestions,
-      questionCount,
-    }),
-    validate: (candidate, { acceptedQuestions }) => validateGeneratedQuestion(candidate, {
-      existingQuestionTexts: new Set([
-        ...contextQuestionTexts,
-        ...acceptedQuestions.map((acceptedQuestion) => normalizeQuestionText(acceptedQuestion.question)),
-      ]),
-    }),
+  const collected = await generateValidItems({
+    contentType,
+    anthropicClient,
+    chapter,
+    humanItems: humanItemsSnapshot.docs.map((doc) => doc.data()),
+    liveAiItems: liveAiItemsSnapshot.docs.map((doc) => doc.data()),
+    previousAiItems: previousAiItemsSnapshot.docs.map((doc) => doc.data()),
+    everyChapterItems,
+    requestedItemCount,
   });
 
-  const generatedQuestionCount = collected.acceptedQuestions.length;
-  const status = getRunStatus(generatedQuestionCount, requestedQuestionCount);
+  const generatedItemCount = collected.acceptedItems.length;
+  const status = getRunStatus(generatedItemCount, requestedItemCount);
   const errors = collected.errors
     .slice(0, MAX_RECORDED_ERRORS)
     .map((errorMessage) => errorMessage.slice(0, MAX_RECORDED_ERROR_LENGTH));
 
   const writeBatch = aiDb.batch();
-  const pendingQuestionIds = collected.acceptedQuestions.map((acceptedQuestion) => {
-    if (dryRun) return null;
-    const pendingQuestionRef = aiDb.collection("questionsAiPending").doc();
-    writeBatch.set(pendingQuestionRef, {
-      chapter,
-      question: acceptedQuestion.question,
-      choices: acceptedQuestion.choices,
-      correctChoice: acceptedQuestion.correctChoice,
-      explanation: acceptedQuestion.explanation,
-      status: "pending",
-      aiGenerated: true,
-      generatedAt: FieldValue.serverTimestamp(),
-      generationRunId: runRef.id,
-      trigger,
-      requestedBy,
-      model: acceptedQuestion.model,
-    });
-    return pendingQuestionRef.id;
+  // generatedFields: question, choices, correctChoice, explanation, or front, back, tags, difficulty, as validated.
+  const items = collected.acceptedItems.map(({ model, ...generatedFields }) => {
+    let pendingDocumentId = null;
+    if (!dryRun) {
+      const pendingDocumentRef = aiDb.collection(definition.pendingCollectionName).doc();
+      writeBatch.set(pendingDocumentRef, {
+        chapter,
+        ...generatedFields,
+        status: "pending",
+        aiGenerated: true,
+        generatedAt: FieldValue.serverTimestamp(),
+        generationRunId: runRef.id,
+        trigger,
+        requestedBy,
+        model,
+      });
+      pendingDocumentId = pendingDocumentRef.id;
+    }
+    return { chapter, ...generatedFields, pendingDocumentId };
   });
   writeBatch.update(runRef, {
-    generatedQuestionCount,
+    generatedItemCount,
     status,
     errors,
     finishedAt: FieldValue.serverTimestamp(),
@@ -177,36 +184,39 @@ async function generateAndRecord({ runRef, trigger, chapter, requestedQuestionCo
 
   return {
     runId: runRef.id,
+    contentType,
     chapter,
     dryRun,
-    requestedQuestionCount,
-    generatedQuestionCount,
+    requestedItemCount,
+    generatedItemCount,
     status,
     errors,
-    questions: collected.acceptedQuestions.map((acceptedQuestion, index) => ({
-      chapter,
-      question: acceptedQuestion.question,
-      choices: acceptedQuestion.choices,
-      correctChoice: acceptedQuestion.correctChoice,
-      explanation: acceptedQuestion.explanation,
-      pendingQuestionId: pendingQuestionIds[index],
-    })),
+    items,
   };
 }
 
 /**
- * "succeeded" when every requested question was generated, "partial" when some were, "failed" when none were.
+ * Reads the duplicate check field (a flashcard's front) of every human, live AI and generated item in every
+ * chapter, whatever its status. Only that field is downloaded.
+ *
+ * @return {Promise<object[]>} one object per document, e.g. {front}, or {} when a document has no such field
  */
-function getRunStatus(generatedQuestionCount, requestedQuestionCount) {
-  if (generatedQuestionCount >= requestedQuestionCount) return "succeeded";
-  return generatedQuestionCount > 0 ? "partial" : "failed";
+async function readEveryChapterDuplicateCheckFields(definition) {
+  const { duplicateCheckFieldName } = definition;
+  const snapshots = await Promise.all([
+    defaultDb.collection(definition.humanCollectionName).select(duplicateCheckFieldName).get(),
+    defaultDb.collection(definition.liveAiCollectionName).select(duplicateCheckFieldName).get(),
+    aiDb.collection(definition.pendingCollectionName).select(duplicateCheckFieldName).get(),
+  ]);
+  return snapshots.flatMap((snapshot) => snapshot.docs.map((doc) => doc.data()));
 }
 
 /**
- * Returns a copy sorted by questionNumber.
+ * "succeeded" when every requested item was generated, "partial" when some were, "failed" when none were.
  */
-function sortByQuestionNumber(questions) {
-  return [...questions].sort((first, second) => (Number(first.questionNumber) || 0) - (Number(second.questionNumber) || 0));
+function getRunStatus(generatedItemCount, requestedItemCount) {
+  if (generatedItemCount >= requestedItemCount) return "succeeded";
+  return generatedItemCount > 0 ? "partial" : "failed";
 }
 
 /**

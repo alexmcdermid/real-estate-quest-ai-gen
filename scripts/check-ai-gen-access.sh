@@ -3,7 +3,7 @@
 # ai-gen service account:
 #   1. a write to the (default) database is refused (HTTP 403)
 #   2. a write to the ai database works (HTTP 200), and the test document is deleted again
-#   3. a read from the (default) database works (HTTP 200, or 404 while metadata/aiQuestions doesn't exist)
+#   3. a read from the (default) database works (HTTP 200, or 404 while metadata/aiContent doesn't exist)
 #
 # Impersonating ai-gen needs roles/iam.serviceAccountTokenCreator on the service account for whoever runs this:
 #   gcloud iam service-accounts add-iam-policy-binding ai-gen@real-estate-quest.iam.gserviceaccount.com \
@@ -71,8 +71,8 @@ else
   report FAIL "the write to ai returned HTTP ${ai_write_status}, expected 200"
 fi
 
-echo "Check 3: reading metadata/aiQuestions from (default)..."
-default_read_status="$(firestore_request GET "${FIRESTORE_DATABASES_URL}/(default)/documents/metadata/aiQuestions")"
+echo "Check 3: reading metadata/aiContent from (default)..."
+default_read_status="$(firestore_request GET "${FIRESTORE_DATABASES_URL}/(default)/documents/metadata/aiContent")"
 if [[ "${default_read_status}" == "200" || "${default_read_status}" == "404" ]]; then
   report PASS "the read from (default) worked (HTTP ${default_read_status})"
 else

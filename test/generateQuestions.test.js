@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { QUESTION_BATCH_SCHEMA, SYSTEM_PROMPT, requestQuestionBatch } from "../src/generateQuestions.js";
+import { QUESTION_BATCH_SCHEMA, QUESTION_SYSTEM_PROMPT, requestQuestionBatch } from "../src/generateQuestions.js";
+import { createFakeAnthropicClient, createMessage, thinkingBlock } from "./support/fakeAnthropicClient.js";
 
 const generatedQuestion = {
   question: "Which of the following must a licensee disclose to a client?",
@@ -19,44 +20,10 @@ const humanQuestion = {
 };
 
 /**
- * A client whose stream(params).finalMessage() resolves to `message`, recording every params object it's called with.
- */
-function createFakeAnthropicClient(message) {
-  const requests = [];
-  const client = {
-    beta: {
-      messages: {
-        stream: (params) => {
-          requests.push(params);
-          return { finalMessage: async () => message };
-        },
-      },
-    },
-  };
-  return { client, requests };
-}
-
-/**
- * A finished message with the given content blocks and stop reason.
- */
-function createMessage(content, { stopReason = "end_turn", stopDetails = null, model = "claude-opus-5-5" } = {}) {
-  return {
-    id: "msg_test",
-    type: "message",
-    role: "assistant",
-    model,
-    content,
-    stop_reason: stopReason,
-    stop_details: stopDetails,
-    usage: { input_tokens: 100, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300, output_tokens: 1500 },
-  };
-}
-
-/**
  * Calls requestQuestionBatch with a fake client and a small chapter context.
  */
 async function requestWithMessage(message, overrides = {}) {
-  const { client, requests } = createFakeAnthropicClient(message);
+  const { client, requests } = createFakeAnthropicClient([message]);
   const result = await requestQuestionBatch({
     anthropicClient: client,
     chapter: 3,
@@ -71,7 +38,6 @@ async function requestWithMessage(message, overrides = {}) {
   return { result, requests };
 }
 
-const thinkingBlock = { type: "thinking", thinking: "", signature: "sig" };
 const fallbackBlock = {
   type: "fallback",
   from: { model: "claude-opus-5-5" },
@@ -84,7 +50,7 @@ describe("requestQuestionBatch", () => {
     const message = createMessage([thinkingBlock, { type: "text", text: JSON.stringify({ questions: [generatedQuestion] }) }]);
     const { result } = await requestWithMessage(message);
     assert.deepEqual(result, {
-      questions: [generatedQuestion],
+      items: [generatedQuestion],
       model: "claude-opus-5-5",
       inputTokens: 2400,
       outputTokens: 1500,
@@ -107,7 +73,7 @@ describe("requestQuestionBatch", () => {
       stopDetails: { type: "refusal", category: "cyber", explanation: null },
     });
     const { result } = await requestWithMessage(message);
-    assert.deepEqual(result.questions, []);
+    assert.deepEqual(result.items, []);
     assert.equal(result.error, "Claude declined the request (category: cyber)");
     assert.equal(result.outputTokens, 1500);
   });
@@ -122,7 +88,7 @@ describe("requestQuestionBatch", () => {
       stopReason: "max_tokens",
     });
     const { result } = await requestWithMessage(message);
-    assert.deepEqual(result.questions, []);
+    assert.deepEqual(result.items, []);
     assert.equal(result.error, "The response hit max_tokens before the JSON was complete");
   });
 
@@ -136,7 +102,7 @@ describe("requestQuestionBatch", () => {
     ], { model: "claude-opus-5" });
     const { result } = await requestWithMessage(message);
     assert.equal(result.error, null);
-    assert.deepEqual(result.questions, [generatedQuestion]);
+    assert.deepEqual(result.items, [generatedQuestion]);
     assert.equal(result.model, "claude-opus-5");
   });
 
@@ -151,7 +117,7 @@ describe("requestQuestionBatch", () => {
     ], { model: "claude-opus-5" });
     const { result } = await requestWithMessage(message);
     assert.equal(result.error, null);
-    assert.deepEqual(result.questions, [generatedQuestion]);
+    assert.deepEqual(result.items, [generatedQuestion]);
     assert.equal(result.model, "claude-opus-5");
   });
 
@@ -162,14 +128,14 @@ describe("requestQuestionBatch", () => {
       { type: "text", text: "Here are your questions" },
     ]);
     const { result } = await requestWithMessage(message);
-    assert.deepEqual(result.questions, []);
+    assert.deepEqual(result.items, []);
     assert.match(result.error, /^The response was not valid JSON/);
   });
 
   test("returns an error for text that isn't JSON", async () => {
     const message = createMessage([thinkingBlock, { type: "text", text: "Here are your questions" }]);
     const { result } = await requestWithMessage(message);
-    assert.deepEqual(result.questions, []);
+    assert.deepEqual(result.items, []);
     assert.match(result.error, /^The response was not valid JSON/);
   });
 
@@ -180,7 +146,7 @@ describe("requestQuestionBatch", () => {
 
   test("returns an error for JSON without a questions array", async () => {
     const { result } = await requestWithMessage(createMessage([{ type: "text", text: "{\"questions\": \"none\"}" }]));
-    assert.deepEqual(result.questions, []);
+    assert.deepEqual(result.items, []);
     assert.equal(result.error, "The response JSON has no questions array");
   });
 
@@ -218,7 +184,7 @@ describe("requestQuestionBatch", () => {
       effort: "high",
       format: { type: "json_schema", schema: QUESTION_BATCH_SCHEMA },
     });
-    assert.equal(params.system, SYSTEM_PROMPT);
+    assert.equal(params.system, QUESTION_SYSTEM_PROMPT);
     for (const removedField of ["thinking", "temperature", "top_p", "top_k", "tool_choice", "tools"]) {
       assert.equal(removedField in params, false, `${removedField} must not be sent`);
     }
@@ -292,20 +258,23 @@ describe("requestQuestionBatch", () => {
 
 describe("course manual topics", () => {
   const validBatch = JSON.stringify({ questions: [generatedQuestion] });
-  const manualChapters = [
-    { number: 5, title: "The Professional Liability of Real Estate Licensees", topics: ["Negligence", "Breach of Fiduciary Duty"] },
-  ];
+  const manualChapters = [{
+    number: 5,
+    title: "The Professional Liability of Real Estate Licensees",
+    topics: ["Negligence", "Breach of Fiduciary Duty"],
+  }];
 
   test("lists the chapter's topics in the cached context and requires each question to test one", async () => {
     const { requests } = await requestWithMessage(createMessage([thinkingBlock, { type: "text", text: validBatch }]), {
       manualChapters,
     });
     const [contextBlock, instructionBlock] = requests[0].messages[0].content;
-    assert.match(contextBlock.text, /WHAT THIS CHAPTER COVERS/);
+    assert.match(contextBlock.text, /WHAT THIS CHAPTER COVERS: .* Every question must test one of these topics\./);
     assert.match(contextBlock.text, /Manual chapter 5, The Professional Liability of Real Estate Licensees:\n- Negligence\n- Breach of Fiduciary Duty/);
     // The topics sit between the chapter heading and the example questions.
     assert.ok(contextBlock.text.indexOf("- Negligence") < contextBlock.text.indexOf("HUMAN-WRITTEN QUESTIONS"));
     assert.match(instructionBlock.text, /It tests one of the course manual topics listed for this chapter/);
+    assert.equal(contextBlock.text.includes("COURSE GLOSSARY TERMS"), false, "the glossary terms are for flashcards only");
   });
 
   test("leaves the topics out for a chapter that has none yet", async () => {

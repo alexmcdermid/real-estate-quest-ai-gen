@@ -13,12 +13,13 @@ describe("chapters", () => {
     const manualChapterNumbers = chapters.flatMap((chapter) => getManualChapters(chapter.id).map((manual) => manual.number));
     assert.deepEqual(manualChapterNumbers, [...manualChapterNumbers].sort((first, second) => first - second));
     assert.equal(new Set(manualChapterNumbers).size, manualChapterNumbers.length, "no manual chapter is mapped twice");
+    const isTrimmedNonEmptyText = (text) => typeof text === "string" && text.trim() === text && text !== "";
     for (const chapter of chapters) {
       for (const manualChapter of chapter.manualChapters) {
         assert.ok(Number.isInteger(manualChapter.number) && manualChapter.number >= 1 && manualChapter.number <= 26);
         assert.ok(manualChapter.title.trim() !== "");
         assert.ok(manualChapter.topics.length > 0, `manual chapter ${manualChapter.number} has topics`);
-        assert.ok(manualChapter.topics.every((topic) => typeof topic === "string" && topic.trim() === topic && topic !== ""));
+        assert.ok(manualChapter.topics.every(isTrimmedNonEmptyText));
       }
     }
   });

@@ -60,7 +60,7 @@ if gcloud iam service-accounts describe "${SERVICE_ACCOUNT_EMAIL}" --project="${
 else
   echo "Creating the service account..."
   gcloud iam service-accounts create "${SERVICE_ACCOUNT_NAME}" --project="${PROJECT_ID}" \
-    --display-name="AI question generator (ai-gen functions)"
+    --display-name="AI question and flashcard generator (ai-gen functions)"
   echo "Waiting 15 seconds for the new service account to propagate (if a grant below says it doesn't exist, re-run)..."
   sleep 15
 fi

@@ -7,8 +7,9 @@ import { runGeneration } from "../src/runGeneration.js";
 try {
   const outcome = await runGeneration({
     trigger: "local",
+    contentType: process.env.CONTENT_TYPE || "questions",
     chapterOverride: Number(process.env.CHAPTER_OVERRIDE) || undefined,
-    questionCountOverride: Number(process.env.QUESTION_COUNT) || undefined,
+    itemCountOverride: Number(process.env.ITEM_COUNT) || undefined,
     dryRun: process.env.DRY_RUN === "true",
     anthropicClient: new Anthropic(),
   });
