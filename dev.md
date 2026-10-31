@@ -40,7 +40,7 @@ Each grant has an IAM condition naming its database (a grant without one covers 
 2. Take `locks/generation` (30 minute TTL, which outlives the function timeout). If another run holds it, the weekly run is skipped and Generate now returns `aborted`.
 3. Generate now only: after 5 manual runs in 24 hours (dry runs included), it returns `resource-exhausted`.
 4. Pick the chapter (this week's from the rotation, unless one was given) and create the `generationRuns` document.
-5. Read the context: the chapter's human questions, its published AI questions, and every question generated for it before (pending, approved or rejected).
+5. Read the context: the chapter's human questions, its published AI questions, and every question generated for it before (pending, approved or rejected). The prompt also lists the chapter's topics: the section headings of the 2024 UBC licensing course manual chapters it covers (`src/chapters.js`; app chapters 9 and 10 have none yet), and each question must test one of them.
 6. Ask Claude for the missing questions, up to 3 attempts, and validate each one.
 7. In one batch, add the valid questions to `questionsAiPending` (skipped on a dry run) and finish the run document.
 

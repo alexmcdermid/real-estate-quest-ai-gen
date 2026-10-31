@@ -57,6 +57,7 @@ export async function requestQuestionBatch({
   anthropicClient,
   chapter,
   chapterName,
+  manualChapters = [],
   humanQuestions,
   liveAiQuestions,
   previousAiQuestions,
@@ -66,11 +67,17 @@ export async function requestQuestionBatch({
   const chapterContextText = buildChapterContextText({
     chapter,
     chapterName,
+    manualChapters,
     humanQuestions,
     liveAiQuestions,
     previousAiQuestions,
   });
-  const instructionText = buildInstructionText({ chapter, questionCount, acceptedQuestions });
+  const instructionText = buildInstructionText({
+    chapter,
+    questionCount,
+    acceptedQuestions,
+    hasManualTopics: manualChapters.length > 0,
+  });
 
   const message = await anthropicClient.beta.messages.stream({
     model: CLAUDE_MODEL,
@@ -163,10 +170,18 @@ function parseFirstValidJson(candidateTexts) {
  * The cached first block: the chapter, its human questions as the style reference, and every earlier AI question
  * whose topic must not be repeated.
  */
-function buildChapterContextText({ chapter, chapterName, humanQuestions, liveAiQuestions, previousAiQuestions }) {
+function buildChapterContextText({
+  chapter,
+  chapterName,
+  manualChapters,
+  humanQuestions,
+  liveAiQuestions,
+  previousAiQuestions,
+}) {
   return [
     `Chapter ${chapter}: ${chapterName}`,
     "",
+    ...formatManualTopicLines(manualChapters),
     `HUMAN-WRITTEN QUESTIONS (${humanQuestions.length}): your reference for topic coverage, style, difficulty, ` +
       "and format. Do not reproduce any of them.",
     formatQuestionLines(humanQuestions, ["question", "choices", "correctChoice", "explanation"]),
@@ -184,11 +199,12 @@ function buildChapterContextText({ chapter, chapterName, humanQuestions, liveAiQ
 /**
  * The second block: what to write. On retries it lists the questions this run already accepted.
  */
-function buildInstructionText({ chapter, questionCount, acceptedQuestions }) {
+function buildInstructionText({ chapter, questionCount, acceptedQuestions, hasManualTopics }) {
   const lines = [
     `Write exactly ${questionCount} new, original ${questionCount === 1 ? "question" : "questions"} for Chapter ${chapter}.`,
     "",
     "Requirements for each question:",
+    ...(hasManualTopics ? ["- It tests one of the course manual topics listed for this chapter"] : []),
     "- It covers a topic or scenario that no question above covers, and that no other question you write now covers",
     "- It matches the style, difficulty, and format of the human-written questions",
     "- It has exactly 4 answer choices, all different, given only in \"choices\" " +
@@ -205,6 +221,23 @@ function buildInstructionText({ chapter, questionCount, acceptedQuestions }) {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * The chapter's course manual topics, grouped by manual chapter, then a blank line. No lines while the chapter has
+ * no topics.
+ */
+function formatManualTopicLines(manualChapters) {
+  if (manualChapters.length === 0) return [];
+  return [
+    "WHAT THIS CHAPTER COVERS: the section headings of the UBC Real Estate Trading Services Licensing Course Manual " +
+      "(2024 edition) chapters it is based on. Every question must test one of these topics.",
+    ...manualChapters.flatMap((manualChapter) => [
+      `Manual chapter ${manualChapter.number}, ${manualChapter.title}:`,
+      ...manualChapter.topics.map((topic) => `- ${topic}`),
+    ]),
+    "",
+  ];
 }
 
 /**

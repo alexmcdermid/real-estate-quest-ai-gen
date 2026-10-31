@@ -289,3 +289,32 @@ describe("requestQuestionBatch", () => {
     assert.ok(retryInstructionBlock.text.includes(generatedQuestion.question));
   });
 });
+
+describe("course manual topics", () => {
+  const validBatch = JSON.stringify({ questions: [generatedQuestion] });
+  const manualChapters = [
+    { number: 5, title: "The Professional Liability of Real Estate Licensees", topics: ["Negligence", "Breach of Fiduciary Duty"] },
+  ];
+
+  test("lists the chapter's topics in the cached context and requires each question to test one", async () => {
+    const { requests } = await requestWithMessage(createMessage([thinkingBlock, { type: "text", text: validBatch }]), {
+      manualChapters,
+    });
+    const [contextBlock, instructionBlock] = requests[0].messages[0].content;
+    assert.match(contextBlock.text, /WHAT THIS CHAPTER COVERS/);
+    assert.match(contextBlock.text, /Manual chapter 5, The Professional Liability of Real Estate Licensees:\n- Negligence\n- Breach of Fiduciary Duty/);
+    // The topics sit between the chapter heading and the example questions.
+    assert.ok(contextBlock.text.indexOf("- Negligence") < contextBlock.text.indexOf("HUMAN-WRITTEN QUESTIONS"));
+    assert.match(instructionBlock.text, /It tests one of the course manual topics listed for this chapter/);
+  });
+
+  test("leaves the topics out for a chapter that has none yet", async () => {
+    const { requests } = await requestWithMessage(createMessage([thinkingBlock, { type: "text", text: validBatch }]), {
+      manualChapters: [],
+    });
+    const [contextBlock, instructionBlock] = requests[0].messages[0].content;
+    assert.equal(contextBlock.text.includes("WHAT THIS CHAPTER COVERS"), false);
+    assert.equal(instructionBlock.text.includes("course manual topics"), false);
+  });
+});
+

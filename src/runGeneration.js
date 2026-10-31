@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_QUESTIONS_PER_RUN, isValidQuestionCount, normalizeAiSettings } from "./aiSettings.js";
 import { pickChapterForDate } from "./chapterRotation.js";
 import { collectValidQuestions } from "./collectValidQuestions.js";
-import { TOTAL_CHAPTERS, getChapterName, isValidChapterNumber } from "./chapters.js";
+import { TOTAL_CHAPTERS, getChapterName, getManualChapters, isValidChapterNumber } from "./chapters.js";
 import { FieldValue, Timestamp, aiDb, defaultDb } from "./firestore.js";
 import { requestQuestionBatch } from "./generateQuestions.js";
 import { normalizeQuestionText, validateGeneratedQuestion } from "./questionValidation.js";
@@ -123,6 +123,7 @@ async function generateAndRecord({ runRef, trigger, chapter, requestedQuestionCo
       anthropicClient,
       chapter,
       chapterName,
+      manualChapters: getManualChapters(chapter),
       humanQuestions,
       liveAiQuestions,
       previousAiQuestions,

@@ -7,7 +7,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_QUESTIONS_PER_RUN, isValidQuestionCount } from "../src/aiSettings.js";
 import { pickChapterForDate } from "../src/chapterRotation.js";
-import { TOTAL_CHAPTERS, getChapterName, isValidChapterNumber } from "../src/chapters.js";
+import { TOTAL_CHAPTERS, getChapterName, getManualChapters, isValidChapterNumber } from "../src/chapters.js";
 import { collectValidQuestions } from "../src/collectValidQuestions.js";
 import { requestQuestionBatch } from "../src/generateQuestions.js";
 import { normalizeQuestionText, validateGeneratedQuestion } from "../src/questionValidation.js";
@@ -41,6 +41,7 @@ const collected = await collectValidQuestions({
     anthropicClient,
     chapter,
     chapterName: getChapterName(chapter),
+    manualChapters: getManualChapters(chapter),
     humanQuestions,
     liveAiQuestions: [],
     previousAiQuestions: [],
