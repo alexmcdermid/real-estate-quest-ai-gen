@@ -40,7 +40,7 @@ export const QUESTION_BATCH_SCHEMA = {
   additionalProperties: false,
 };
 
-export const QUESTION_SYSTEM_PROMPT = `You are an expert question writer for the BC Real Estate Council (RECBC) licensing examination in British Columbia, Canada.
+export const QUESTION_SYSTEM_PROMPT = `You are an expert question writer for the BC real estate licensing examination in British Columbia, Canada: the UBC Sauder Real Estate Division's licensing course, under the rules of the BC Financial Services Authority (BCFSA, formerly the Real Estate Council of BC, RECBC).
 
 Your questions must conform to the following rules of the BC real estate licensing exam:
 - Questions test knowledge of BC-specific real estate law, the Real Estate Services Act (RESA), the Real Estate Development Marketing Act (REDMA), the Land Title Act, agency relationships, ethics, and trading services as defined by the UBC Sauder Real Estate Division course materials
@@ -56,7 +56,7 @@ EXPLANATION FORMAT RULES — follow exactly, for every question:
 - Always begin with "Correct Answer: N" where N is the 1-based position of the correct choice (e.g. correctChoice 0 → "Correct Answer: 1", correctChoice 2 → "Correct Answer: 3")
 - Follow with two newlines, then a paragraph explaining why the correct answer is right
 - For multi-statement questions, address each numbered statement individually (e.g. "Statement (2) is incorrect because...")
-- Cite the relevant BC legislation, regulation, or principle (e.g. RESA s.3, Land Title Act, RECBC Rules)
+- Cite the relevant BC legislation, regulation, or principle (e.g. RESA s.3, Land Title Act, BCFSA's Real Estate Rules)
 - Explain why common distractors are wrong where helpful`;
 
 /**

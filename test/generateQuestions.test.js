@@ -320,3 +320,12 @@ describe("question batch schema", () => {
     });
   });
 });
+
+describe("question system prompt", () => {
+  test("names BCFSA as the regulator, not the former Real Estate Council", () => {
+    assert.match(QUESTION_SYSTEM_PROMPT, /BC Financial Services Authority \(BCFSA, formerly the Real Estate Council of BC, RECBC\)/);
+    assert.match(QUESTION_SYSTEM_PROMPT, /BCFSA's Real Estate Rules/);
+    assert.equal(QUESTION_SYSTEM_PROMPT.includes("RECBC Rules"), false);
+  });
+});
+
