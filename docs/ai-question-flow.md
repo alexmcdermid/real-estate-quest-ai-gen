@@ -1,6 +1,6 @@
-# AI question flow (proposed)
+# AI question flow
 
-> **Status:** draft design, not built. Once built, this replaces the GitHub Actions + separate `real-estate-quest-ai` Firebase project setup described in [README.md](../README.md) and [dev.md](../dev.md).
+> **Status:** built on branch `feature/ai-question-flow`, not deployed yet. It replaces the GitHub Actions + separate `real-estate-quest-ai` Firebase project setup; [dev.md](../dev.md) has the new setup and deploy steps.
 >
 > The app-side half (review, import, serving) is in `real-estate-quest` → `docs/ai-question-flow.md`. The principles, where things live, overview and lifecycle sections are the same in both repos.
 
@@ -20,7 +20,7 @@ There is **one Firebase project**, the existing `real-estate-quest`. There is no
 |---|---|---|
 | Firebase project | `real-estate-quest` | The only one. Runs the app, all functions, and both Firestore databases. |
 | Functions | `default` codebase from the `real-estate-quest` repo<br>`ai-gen` codebase from the `real-estate-quest-ai-gen` repo | Two repos deploy into the same project. Deploying one never touches the other's functions. |
-| Firestore `(default)` | Everything that exists today (`members`, `questions`, `flashcards`, `study_activity_logs`, ...), plus `questionsAi`, `metadata/aiQuestions` (switches and `perRun`), `metadata/content` (`contentVersion`), `locks/*` (per-chapter locks) | User data lives here. Point-in-time recovery plus the existing weekly backups. |
+| Firestore `(default)` | Everything that exists today (`members`, `questions`, `flashcards`, `study_activity_logs`, ...), plus `questionsAi`, `metadata/aiQuestions` (`generationEnabled`, `servingEnabled`, `questionsPerRun`), `metadata/content` (`contentVersion`), `metadata/questionsAi` (AI file hashes), `locks/*` (per-chapter locks) | User data lives here. Point-in-time recovery plus the existing weekly backups. |
 | Firestore `ai` (new) | `questionsAiPending` (review queue), `generationRuns` (one doc per run, with any error), `locks/generation` | Everything the generator writes, and nothing else. Disposable, so no point-in-time recovery or backups. |
 | Service accounts | `ai-gen` (new) runs the `ai-gen` functions<br>The app's functions keep the default one | See Access below. |
 | GitHub | `real-estate-quest-questions` (existing, human)<br>`real-estate-quest-ai-questions` (new, AI) | Both private. The source of truth for anything students see. |
@@ -67,7 +67,7 @@ flowchart LR
     API["getQuestionsByChapter<br/>preloadContent"]
     STU["Student app"]
     Q --> API
-    QA -- "if serve flag on" --> API
+    QA -- "if servingEnabled" --> API
     API --> STU
   end
 
@@ -116,46 +116,47 @@ sequenceDiagram
   participant C as Claude API
 
   S->>G: weekly trigger
-  G->>D: read metadata/aiQuestions (generate flag, perRun)
-  alt generate flag off
+  G->>D: read metadata/aiQuestions (generationEnabled, questionsPerRun)
+  alt generationEnabled off
     G-->>S: exit
   end
   G->>A: take the generation lock (skip the run if one is already going)
   G->>G: pick this week's chapter (rotation or override)
+  G->>A: create the generationRuns doc (status running)
   G->>D: read every question in chapter N (context)
   G->>D: read questionsAi for chapter N (avoid duplicates)
   G->>A: read questionsAiPending for chapter N, rejected included
-  loop up to 3 attempts, until perRun questions are valid
+  loop up to 3 attempts, until questionsPerRun questions are valid
     G->>C: one request for the remaining count, JSON schema output
-    C-->>G: thinking block(s), then a text block with the JSON array
-    G->>G: check stop_reason, read the text block (not content[0]), validate each question
+    C-->>G: thinking block(s), then a text block with the questions JSON
+    G->>G: check stop_reason, parse the JSON from the text blocks (never content[0]), validate each question
   end
-  G->>A: add valid ones to questionsAiPending (status pending, aiGenerated true)
-  G->>A: record the run in generationRuns (chapter, counts, any error)
+  G->>A: one batch: add valid ones to questionsAiPending (status pending, aiGenerated true),<br/>finish the run doc (status, counts, any errors)
   G->>A: release the generation lock
 ```
 
 - **One chapter per week**, with every question in that chapter sent as context. The chapter rotation repeats every 20 weeks.
-- **`perRun` questions per run**, from `metadata/aiQuestions`, so it can change without a deploy. Start at 1–2 and scale to 5–10. They're generated in one request so they don't repeat each other, and the chapter context is only paid for once.
+- **`questionsPerRun` questions per run**, from `metadata/aiQuestions`, so it can change without a deploy. Start at 1–2 and scale to 5–10. They're generated in one request so they don't repeat each other, and the chapter context is only paid for once.
 - **The generator doesn't assign `questionNumber` or `premium`.** The reviewer decides free or premium at approval, and approval assigns the number from the AI repo file, so rejected questions don't leave gaps.
-- **Every run leaves a `generationRuns` doc,** including runs that produced fewer than `perRun` questions or failed. The generator can't write `function_error_logs` in `(default)`, so this is where its errors go; the admin AI tab shows the recent runs.
+- **Every run leaves a `generationRuns` doc,** including runs that produced fewer than `questionsPerRun` questions or failed. The generator can't write `function_error_logs` in `(default)`, so this is where its errors go; the admin AI tab shows the recent runs.
+- **A run gets up to 30 minutes.** Both functions time out after 1800 s, the most a scheduled function can have, and the generation lock lasts 30 minutes, so it outlives any function run.
 
 ### Generate now (manual runs)
 
-The browser can't call a scheduled function, so manual runs get their own endpoint. `generateAiQuestionsNow` is an `onCall` function in this codebase that shares the generator's core code with the schedule. The admin page's Generate now button calls it.
+The browser can't call a scheduled function, so manual runs get their own endpoint. `generateAiQuestionsNow` is an `onCall` function in this codebase that shares the generator's core code (`runGeneration`) with the schedule. The admin page's Generate now button calls it and waits up to 30 minutes for the result.
 
-- **Admin only.** It requires App Check and the `isAdmin` claim, like the app's other admin callables. Anyone else gets `permission-denied`.
-- **Inputs:** an optional `chapter` (defaults to this week's), `count` (defaults to `perRun`, capped at 10), and `dryRun`, which returns the questions without writing them.
-- **It ignores the `generate` flag,** so you can test before turning the weekly schedule on.
-- **No double runs.** It takes the same generation lock as the schedule, so a double-click or a clash with the Monday run returns "already running" instead of paying for two runs.
-- **Bounded cost.** A daily cap on manual runs (say 5), counted from today's `generationRuns`, stops a stuck button or a loop from running up the Claude bill.
+- **Admin only.** It requires App Check and the `isAdmin` claim, like the app's other admin callables. Signed-out callers get `unauthenticated`, and anyone else without the claim gets `permission-denied`.
+- **Inputs:** an optional `chapter` (1–20, defaults to this week's), `questionCount` (1–10, defaults to `questionsPerRun`), and `dryRun`, which returns the questions without adding them to the review queue (the run is still recorded). Other values get `invalid-argument`.
+- **It ignores `generationEnabled`,** so you can test before turning the weekly schedule on.
+- **No double runs.** It takes the same generation lock as the schedule, so a double-click or a clash with the Monday run returns "already running" (`aborted`) instead of paying for two runs.
+- **Bounded cost.** A cap of 5 manual runs in the last 24 hours (dry runs count), counted from `generationRuns`, stops a stuck button or a loop from running up the Claude bill. Past it, the call returns `resource-exhausted`.
 - **It records who asked:** the run record and pending docs from a manual run get `requestedBy`.
 
 ## Where the generator runs: Cloud Function
 
 Both options are close to free. The Claude call is the real cost, and it's the same either way.
 
-| | Cloud Function (chosen) | GitHub Actions (current code) |
+| | Cloud Function (chosen) | GitHub Actions (old code) |
 |---|---|---|
 | Infra cost | Free tier covers it. Cloud Scheduler gives 3 free jobs per billing account and the project already has 3, so this one is about $0.10/month | Free on a public repo; a private repo uses about 1 of 2,000 free minutes a month |
 | Claude cost | On Opus 5.5, about 10 cents per run for the chapter context (up to ~25k input tokens for an 80-question chapter), plus a few cents per question. At 5–10 questions a week, a few dollars a month | Same |
@@ -170,30 +171,30 @@ The code stays in this repo and deploys to the `real-estate-quest` project as it
 
 **Access setup (before the first deploy)**
 
-- [ ] Create the `ai` Firestore database, in the same location as `(default)`. Give it deny-all security rules, listed under `firestore` in this repo's `firebase.json` with their own rules file, so deploys from here only touch the `ai` database's rules.
-- [ ] Create the `ai-gen` service account. Grant it `roles/datastore.user` on `ai` and `roles/datastore.viewer` on `(default)`, each with an IAM condition naming the database, plus `roles/secretmanager.secretAccessor` on the Anthropic key secret only. Let whoever deploys act as it (`roles/iam.serviceAccountUser`). Keep the `gcloud` commands in a script here so the setup can be rebuilt.
-- [ ] Once deployed, check the boundary: a test write to `(default)` as `ai-gen` should fail with `PERMISSION_DENIED`.
+- [ ] Create the `ai` Firestore database, in the same location as `(default)`; `scripts/setup-ai-gen-access.sh` does it. Its deny-all security rules (`firestore.ai.rules`) are listed under `firestore` in this repo's `firebase.json`, so deploys from here only touch the `ai` database's rules.
+- [ ] Create the `ai-gen` service account. Grant it `roles/datastore.user` on `ai` and `roles/datastore.viewer` on `(default)`, each with an IAM condition naming the database, plus `roles/secretmanager.secretAccessor` on the Anthropic key secret only. Let whoever deploys act as it (`roles/iam.serviceAccountUser`). Running `scripts/setup-ai-gen-access.sh` does all of this and is safe to repeat; set the `ANTHROPIC_API_KEY` secret first, and `DEPLOYER_MEMBER` for the deployer grant.
+- [ ] Once deployed, check the boundary with `scripts/check-ai-gen-access.sh` (it needs `roles/iam.serviceAccountTokenCreator` on `ai-gen`): a test write to `(default)` as `ai-gen` should fail with `PERMISSION_DENIED`. Then force a run of the `generateAiQuestions` job in Cloud Scheduler to check it can still invoke the function.
 
 **Code**
 
-- [ ] Turn `src/index.js` into a `generateAiQuestions` scheduled function. Add `firebase.json` with codebase `ai-gen`, targeting the `real-estate-quest` project.
-- [ ] Set `serviceAccount` to `ai-gen` on both functions. Without it they run as the default account, which can write everywhere. Check that Cloud Scheduler can still invoke the scheduled function afterwards.
-- [ ] Use two Firestore clients: `(default)` for reads, `getFirestore("ai")` for every write.
-- [ ] Record each run in `generationRuns` instead of writing `function_error_logs`.
-- [ ] Add `generateAiQuestionsNow`, an admin-only callable (App Check + `isAdmin`) that shares the generator's core. It takes `chapter`, `count` and `dryRun`, and uses the shared generation lock and a daily cap.
-- [ ] Read few-shot examples from the Firestore `questions` collection instead of GitHub. That drops Octokit and the `GITHUB_PAT` / `QUESTIONS_REPO_PAT` mismatch.
-- [ ] Read duplicate-avoidance context from `questionsAi` plus every `questionsAiPending` doc for the chapter, including rejected ones.
-- [ ] Remove `questionNumber` assignment and the composite-index query that came with it. Stop forcing `premium: true`; the reviewer sets it.
-- [ ] Generate `perRun` questions in one request: the schema returns an array, and each question is validated on its own.
-- [ ] Bump `@anthropic-ai/sdk` from 0.39.0 and move to `claude-opus-5-5`. Opus 5.5 always thinks, so the response starts with a thinking block, and today's `message.content[0].text` would throw. Read the block whose `type` is `"text"`, or use `client.messages.parse()` with the JSON schema.
-- [ ] Use structured outputs (`output_config.format`).
-  - **Check `stop_reason` before parsing.** On `max_tokens`, raise the limit or stream, then retry. On `refusal`, either turn on the server-side fallback (`fallbacks: "default"`) or count the attempt as failed.
-  - **Size `max_tokens` for thinking plus `perRun` questions**, streaming once it's large.
-  - **Set `output_config.effort` explicitly.** Opus 5.5 defaults to `medium`.
-  - **Retry up to 3 times** for any missing questions.
-- [ ] Read the `generate` flag and `perRun` from `metadata/aiQuestions` before running.
-- [ ] Keep a local dry-run script (`DRY_RUN=true`) alongside the callable's `dryRun` option.
-- [ ] Delete the two GitHub workflows and the staging-project setup; rewrite README.md and dev.md.
+- [x] Turn `src/index.js` into a `generateAiQuestions` scheduled function. Add `firebase.json` with codebase `ai-gen`, targeting the `real-estate-quest` project (`.firebaserc`). Its predeploy runs `npm test` and refuses to deploy while a `.env` file exists.
+- [x] Set `serviceAccount` to `ai-gen` on both functions. Without it they run as the default account, which can write everywhere.
+- [x] Use two Firestore clients ([src/firestore.js](../src/firestore.js)): `defaultDb` for reads, `aiDb` (`getFirestore(app, "ai")`) for every write.
+- [x] Record each run in `generationRuns` instead of writing `function_error_logs`.
+- [x] Add `generateAiQuestionsNow`, an admin-only callable (App Check + `isAdmin`) that shares the generator's core ([src/runGeneration.js](../src/runGeneration.js)). It takes `chapter`, `questionCount` and `dryRun`, and uses the shared generation lock and a daily cap.
+- [x] Read few-shot examples from the Firestore `questions` collection instead of GitHub. That drops Octokit and the `GITHUB_PAT` / `QUESTIONS_REPO_PAT` mismatch.
+- [x] Read duplicate-avoidance context from `questionsAi` plus every `questionsAiPending` doc for the chapter, including rejected ones.
+- [x] Remove `questionNumber` assignment and the composite-index query that came with it. Stop forcing `premium: true`; the reviewer sets it.
+- [x] Generate `questionsPerRun` questions in one request: the schema returns a `questions` array, and each question is validated on its own.
+- [x] Bump `@anthropic-ai/sdk` from 0.39.0 to ^1.3.0 and move to `claude-opus-5-5`. Opus 5.5 always thinks, so the response starts with thinking blocks, and the old `message.content[0].text` would throw. Parse the JSON from the `text` blocks instead, which also works when a `fallback` block sits between them.
+- [x] Use structured outputs (`output_config.format`).
+  - **Check `stop_reason` before parsing.** The server-side fallback is on (`fallbacks: "default"`), and a `refusal` or `max_tokens` that still comes back counts the attempt as failed.
+  - **`max_tokens` is 64000,** for thinking plus up to 10 questions, so the request is always streamed.
+  - **`output_config.effort` is set to `high`.** Opus 5.5 defaults to `medium`.
+  - **Up to 3 attempts** for any missing questions.
+- [x] Read `generationEnabled` and `questionsPerRun` from `metadata/aiQuestions` before running.
+- [x] Keep a local runner alongside the callable's `dryRun` option: `npm run generate:local` reads `local-generation.env` (never `.env`, which the Firebase CLI would deploy) and takes `DRY_RUN=true`.
+- [x] Delete the two GitHub workflows and the staging-project setup; rewrite README.md and dev.md.
 
 ## Decisions
 
@@ -204,3 +205,9 @@ The code stays in this repo and deploys to the `real-estate-quest` project as it
 - **Who sees AI questions** (app side): everyone, always labeled as AI. Pro users choose Mixed (default), Human only, or AI only; free users get them mixed in.
 - **Generator access:** its own `ai` database and service account inside this project, not a separate project. It can write only to `ai` and only read `(default)`.
 - **Backups:** point-in-time recovery on `(default)` alongside the weekly backups. The `ai` database needs neither.
+
+## Deviations from the plan
+
+- **Names:** `generate`, `serve`, `perRun` and `count` are `generationEnabled`, `servingEnabled`, `questionsPerRun` and `questionCount`.
+- **The local runner reads `local-generation.env`, not `.env`,** because the Firebase CLI deploys a `.env` in the functions folder as plain environment variables.
+- **Dry runs are recorded:** they add nothing to the review queue, but they leave a `generationRuns` doc and count toward the daily cap.
