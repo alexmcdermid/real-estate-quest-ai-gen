@@ -10,10 +10,26 @@ export const QUESTION_BATCH_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          question: { type: "string" },
-          choices: { type: "array", items: { type: "string" } },
-          correctChoice: { type: "integer", enum: [0, 1, 2, 3] },
-          explanation: { type: "string" },
+          question: {
+            type: "string",
+            description: "The question text: a scenario, a direct knowledge question, or numbered statements 1-4 on " +
+              "their own lines. Don't list the answer choices here.",
+          },
+          choices: {
+            type: "array",
+            items: { type: "string" },
+            description: "Exactly 4 different answer choices, all plausible, exactly one correct.",
+          },
+          correctChoice: {
+            type: "integer",
+            enum: [0, 1, 2, 3],
+            description: "The 0-based index of the correct answer in choices.",
+          },
+          explanation: {
+            type: "string",
+            description: "Starts with \"Correct Answer: N\" (N = correctChoice + 1), then two newlines, then why the " +
+              "answer is right and why the main distractors are wrong, citing the BC statute, regulation or rule.",
+          },
         },
         required: ["question", "choices", "correctChoice", "explanation"],
         additionalProperties: false,

@@ -66,6 +66,13 @@ function withoutContentTypeParts(params) {
   };
 }
 
+/**
+ * The schema without its description annotations, to compare its structure.
+ */
+function withoutDescriptions(schema) {
+  return JSON.parse(JSON.stringify(schema, (key, value) => (key === "description" ? undefined : value)));
+}
+
 describe("requestFlashcardBatch", () => {
   test("parses the flashcards array in the text block that follows the thinking block", async () => {
     const { result } = await requestWithMessage(createJsonMessage({ flashcards: [generatedFlashcard] }));
@@ -133,8 +140,11 @@ describe("requestFlashcardBatch", () => {
     assert.equal(instructionBlock.cache_control, undefined);
   });
 
-  test("asks for front, back, tags and a difficulty of 1 to 3, all required", () => {
-    assert.deepEqual(FLASHCARD_BATCH_SCHEMA, {
+  test("asks for front, back, tags and a difficulty of 1 to 3, all required and each described", () => {
+    for (const fieldSchema of Object.values(FLASHCARD_BATCH_SCHEMA.properties.flashcards.items.properties)) {
+      assert.ok(fieldSchema.description?.trim(), "every field tells Claude what it holds");
+    }
+    assert.deepEqual(withoutDescriptions(FLASHCARD_BATCH_SCHEMA), {
       type: "object",
       properties: {
         flashcards: {

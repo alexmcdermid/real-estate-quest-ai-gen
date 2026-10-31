@@ -287,3 +287,36 @@ describe("course manual topics", () => {
   });
 });
 
+describe("question batch schema", () => {
+  test("asks for question, choices, correctChoice 0-3 and explanation, all required and each described", () => {
+    const questionFields = QUESTION_BATCH_SCHEMA.properties.questions.items.properties;
+    for (const fieldSchema of Object.values(questionFields)) {
+      assert.ok(fieldSchema.description?.trim(), "every field tells Claude what it holds");
+    }
+    assert.match(questionFields.explanation.description, /Correct Answer: N/);
+    const withoutDescriptions = JSON.parse(
+      JSON.stringify(QUESTION_BATCH_SCHEMA, (key, value) => (key === "description" ? undefined : value)),
+    );
+    assert.deepEqual(withoutDescriptions, {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+              choices: { type: "array", items: { type: "string" } },
+              correctChoice: { type: "integer", enum: [0, 1, 2, 3] },
+              explanation: { type: "string" },
+            },
+            required: ["question", "choices", "correctChoice", "explanation"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["questions"],
+      additionalProperties: false,
+    });
+  });
+});

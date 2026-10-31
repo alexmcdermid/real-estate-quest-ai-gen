@@ -10,10 +10,18 @@ export const FLASHCARD_BATCH_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          front: { type: "string" },
-          back: { type: "string" },
-          tags: { type: "array", items: { type: "string" } },
-          difficulty: { type: "integer", enum: [1, 2, 3] },
+          front: { type: "string", description: "The term or concept, in a few words." },
+          back: {
+            type: "string",
+            description: "A plain-language definition in your own words, 1-3 sentences, accurate under current BC law " +
+              "and practice.",
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Lowercase: \"definitions\" plus 1-3 topic tags like the human cards use.",
+          },
+          difficulty: { type: "integer", enum: [1, 2, 3], description: "1 basic term, 2 standard, 3 nuanced." },
         },
         required: ["front", "back", "tags", "difficulty"],
         additionalProperties: false,
