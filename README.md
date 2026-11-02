@@ -1,61 +1,57 @@
 # real-estate-quest-ai-gen
 
-A weekly GitHub Actions workflow that uses the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-js) and Claude Opus to generate new BC real estate licensing exam practice questions, demonstrating how to integrate an LLM into an automated content pipeline.
+Cloud Functions that use Claude, through the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript), to write new BC real estate licensing exam practice questions and study flashcards. Everything generated waits in a review queue until an admin approves it on the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin page. Only approved questions and flashcards reach students.
 
-Generated questions are written to a dedicated Firebase project, reviewed by a human in the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin console, and only then made available to students on the live site.
+The design is in [docs/ai-question-flow.md](docs/ai-question-flow.md). Setup, data and deploys are in [dev.md](dev.md).
 
 ## How it works
 
-1. **Schedule** — A GitHub Actions cron job runs every Monday at 9am UTC
-2. **Fetch** — Reads a chapter's worth of questions from a private question bank via the GitHub API
-3. **Generate** — Sends all questions from that chapter as few-shot examples to Claude Opus, which generates one new original question in the same format and style
-4. **Validate** — Checks the response matches the required JSON schema and explanation format before accepting it
-5. **Write** — Saves the question to `questionsAiPending` in a separate Firebase project, where it waits for human review
-6. **Review** — A human reviews the pending question in the [real-estate-quest](https://github.com/alexmcdermid/real-estate-quest) admin console and approves or rejects it
-7. **Publish** — Approved questions are pulled into the production database and served to students on the live site
+1. **Trigger:** `generateAiContent` runs every Monday at 9am Pacific while weekly generation is on: a questions run, then a flashcards run, for this week's chapter. The admin page's **Generate now** button calls `generateAiContentNow` (admins only) for questions or flashcards, a chapter, an item count and an optional dry run.
+2. **Context:** reads the chapter's human and published AI questions (or flashcards) from the `(default)` Firestore database, read only, plus everything generated for the chapter before, rejected items included, from the `ai` database. For flashcards it also reads the front of every card in every chapter, and the prompt offers only the course glossary terms that no card covers yet.
+3. **Generate:** one Claude Opus 5.5 request for all of the run's items, with JSON schema structured output, and up to 3 attempts for any that are missing or invalid.
+4. **Validate:** questions need exactly 4 distinct choices, a valid `correctChoice` and an explanation that starts with `Correct Answer: N`; flashcards need a front, a back, 1 to 5 tags and a difficulty from 1 to 3. Both have length limits, no ChatGPT citation artifacts and no duplicates of existing items: a question is checked against its chapter's questions, a flashcard's front against every chapter's cards.
+5. **Queue:** valid items go to `questionsAiPending` or `flashcardsAiPending` in the `ai` database, and the run is recorded in `generationRuns`.
+6. **Review and publish (app repo):** approving an item commits it to the private AI repo and imports it into `questionsAi` or `flashcardsAi`. Rejected items stay in the queue so they aren't generated again.
 
-Questions are never written directly to the production database.
+Both functions run as the `ai-gen` service account, which can write only the `ai` database and only read `(default)`.
 
 ## Project structure
 
 ```
 src/
-  index.js              # entry point — picks chapter, orchestrates the pipeline
-  fetchQuestions.js     # reads chapter questions from private GitHub repo via Octokit
-  generateQuestion.js   # Anthropic SDK call with few-shot prompting + output validation
-  writeToFirestore.js   # writes pending question to Firebase (AI project, not prod)
-.github/workflows/
-  generate-questions.yml  # weekly cron + manual trigger
-  dry-run.yml             # manual trigger only — logs output, no Firestore write
+  index.js                 function exports: generateAiContent (weekly) and generateAiContentNow (callable)
+  runGeneration.js         shared core: settings, lock, daily cap, context, writes, run record
+  contentTypes.js          what differs between questions and flashcards, and the generation steps they share
+  collectValidItems.js     the attempt loop: request, validate, retry for the missing items
+  claudeBatchRequest.js    the Claude request and response handling both content types share
+  generateQuestions.js     the question prompt
+  generateFlashcards.js    the flashcard prompt
+  questionValidation.js    question rules and the duplicate check
+  flashcardValidation.js   flashcard rules and the duplicate check
+  textChecks.js            citation artifacts and duplicate normalization
+  chapterRotation.js       this week's chapter
+  chapters.js              chapter names and course manual topics
+  glossaryTerms.js         the course manual glossary's terms (no definitions), for flashcards
+  aiSettings.js            metadata/aiContent defaults
+  firestore.js             (default) for reads, ai for every write
+scripts/
+  generateLocally.js       local runner (npm run generate:local)
+  previewGeneration.js     preview from local question and flashcard files, no Firebase (npm run preview:local)
+  setup-ai-gen-access.sh   one-time database, service account and IAM setup
+  check-ai-gen-access.sh   checks the access boundary
+test/                      unit tests (npm test)
+firebase.json              the ai-gen functions codebase and the ai database rules
+firestore.ai.rules         deny-all rules for the ai database
 ```
 
-## Running locally
+## Commands
 
 ```bash
-cp .env.example .env
-# fill in all three credentials (see .env.example for instructions)
 npm install
-npm run dev
+npm test                                        # unit tests, no credentials needed
+npm run preview:local                           # preview questions from local files, only needs ANTHROPIC_API_KEY
+CONTENT_TYPE=flashcards npm run preview:local   # the same for flashcards
+npm run generate:local                          # one run from your machine, see dev.md
+firebase deploy --only functions:ai-gen         # this repo's functions only
+firebase deploy --only firestore                # the ai database's rules only
 ```
-
-Use `DRY_RUN=true` in `.env` to generate and log a question without writing to Firestore.
-See [dev.md](dev.md) for full setup instructions including Firebase and GitHub PAT configuration.
-
-## GitHub Actions secrets
-
-| Secret | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `QUESTIONS_REPO_PAT` | Fine-grained GitHub PAT, read-only on the private questions repo |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Service account key for the `real-estate-quest-ai` Firebase project |
-
-Add these under **Settings → Secrets and variables → Actions** in this repo.
-
-## Workflows
-
-| Workflow | Trigger | Effect |
-|---|---|---|
-| Generate AI Question | Weekly (Mon 9am UTC) + manual | Generates and writes to Firestore |
-| Dry Run | Manual only | Generates and logs to Actions output, no write |
-
-Both support an optional chapter number input when triggered manually.

@@ -1,0 +1,33 @@
+{
+  "functions": [
+    {
+      "source": ".",
+      "codebase": "ai-gen",
+      "ignore": [
+        "node_modules",
+        ".git",
+        ".github",
+        ".claude",
+        "docs",
+        "scripts",
+        "test",
+        "*.md",
+        "*.env",
+        "*.env.example",
+        ".env*",
+        "firestore.ai.rules",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "test ! -e \"$RESOURCE_DIR/.env\" || (echo 'Remove .env: the Firebase CLI deploys it as plain environment variables. Use local-generation.env for local runs.' && exit 1)",
+        "npm --prefix \"$RESOURCE_DIR\" test"
+      ]
+    }
+  ],
+  "firestore": {
+    "database": "ai",
+    "rules": "firestore.ai.rules"
+  }
+}
